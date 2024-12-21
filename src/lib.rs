@@ -99,6 +99,14 @@ pub trait VOr<RHS> {
     fn or(self, rhs: RHS) -> Self::Output;
 }
 
+impl VOr<Null> for Null {
+    type Output = Null;
+
+    fn or(self, _rhs: Null) -> Self::Output {
+        Null
+    }
+}
+
 impl<LHS, RHS> VOr<Value<RHS>> for Value<LHS> {
     type Output = Self;
 
