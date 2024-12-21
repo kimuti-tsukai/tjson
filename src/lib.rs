@@ -10,9 +10,12 @@ pub struct TTrue;
 pub struct TFalse;
 
 pub trait TBool {
-    type Then<T>: Optional<T>;
+    type Then<T>: Optional<Value = T>;
 
     fn as_bool() -> bool;
+
+    type Or<RHS: TBool>: TBool;
+    type And<RHS: TBool>: TBool;
 }
 
 impl TBool for TTrue {
@@ -21,25 +24,20 @@ impl TBool for TTrue {
     fn as_bool() -> bool {
         true
     }
+
+    type Or<RHS: TBool> = TTrue;
+    type And<RHS: TBool> = RHS;
 }
 
 impl TBool for TFalse {
-    type Then<T> = Null;
+    type Then<T> = Null<T>;
+
     fn as_bool() -> bool {
         false
     }
-}
 
-pub trait TOr<RHS: TBool> {
-    type Output: TBool;
-}
-
-impl<RHS: TBool> TOr<RHS> for TFalse {
-    type Output = RHS;
-}
-
-impl<RHS: TBool> TOr<RHS> for TTrue {
-    type Output = TTrue;
+    type Or<RHS: TBool> = RHS;
+    type And<RHS: TBool> = TFalse;
 }
 
 pub trait TEqual<T> {
@@ -56,41 +54,57 @@ impl<T> TEqual<T> for T {
 
 // Value
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Null;
+pub struct Null<T>(PhantomData<T>);
 
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Value<T>(T);
 
-pub trait Optional<T> {
-    fn as_option(self) -> Option<T>;
+pub trait Optional {
+    type Value;
 
-    fn from_value(value: T) -> Self;
+    fn as_option(self) -> Option<Self::Value>;
 
-    type Or<O: Optional<U>, U>;
+    fn from_value(value: Self::Value) -> Self;
+
+    fn or<O: Optional>(self, rhs: O) -> <Self as Optional>::Or<O>;
+
+    type Or<O: Optional>: Optional;
 }
 
-impl<T> Optional<T> for Null {
-    fn as_option(self) -> Option<T> {
+impl<T> Optional for Null<T> {
+    type Value = T;
+
+    fn as_option(self) -> Option<Self::Value> {
         None
     }
 
-    fn from_value(_value: T) -> Self {
-        Null
+    fn from_value(_value: Self::Value) -> Self {
+        Self(PhantomData)
     }
 
-    type Or<O: Optional<U>, U> = O;
+    fn or<O: Optional>(self, rhs: O) -> <Self as Optional>::Or<O> {
+        rhs
+    }
+
+    type Or<O: Optional> = O;
 }
 
-impl<T> Optional<T> for Value<T> {
-    fn as_option(self) -> Option<T> {
+impl<T> Optional for Value<T> {
+    type Value = T;
+
+    fn as_option(self) -> Option<Self::Value> {
         Some(self.0)
     }
 
-    fn from_value(value: T) -> Self {
+    fn from_value(value: Self::Value) -> Self {
         Self(value)
     }
 
-    type Or<O: Optional<U>, U> = Self;
+    fn or<O: Optional>(self, _rhs: O) -> <Self as Optional>::Or<O> {
+        self
+    }
+
+    type Or<O: Optional> = Self;
 }
 
 pub trait VOr<RHS> {
@@ -99,7 +113,7 @@ pub trait VOr<RHS> {
     fn or(self, rhs: RHS) -> Self::Output;
 }
 
-impl<RHS> VOr<RHS> for Null {
+impl<RHS, T> VOr<RHS> for Null<T> {
     type Output = RHS;
 
     fn or(self, rhs: RHS) -> Self::Output {
@@ -128,27 +142,28 @@ impl HList for HNil {}
 
 impl<Head, Tail: HList> HList for HCons<Head, Tail> {}
 
-pub trait Get<Key> {
-    type Output;
+pub trait Get<Key, Value> {
+    type Output: Optional;
 
     fn get(self) -> Self::Output;
 }
 
-impl<Key> Get<Key> for HNil {
-    type Output = Null;
+impl<Key, Value> Get<Key, Value> for HNil {
+    type Output = Null<Value>;
 
     fn get(self) -> Self::Output {
-        Null
+        Null(PhantomData)
     }
 }
 
-impl<Key, Head, Tail, Out1, Out2> Get<Key> for HCons<Head, Tail>
+impl<Key, Head, Tail, Out1, Out2, Value> Get<Key, Value> for HCons<Head, Tail>
 where
-    Head: Get<Key, Output = Out1>,
-    Tail: Get<Key, Output = Out2>,
-    Out1: VOr<Out2>,
+    Head: Get<Key, Value, Output = Out1>,
+    Tail: Get<Key, Value, Output = Out2>,
+    Out1: Optional,
+    Out2: Optional,
 {
-    type Output = <Out1 as VOr<Out2>>::Output;
+    type Output = <Out1 as Optional>::Or<Out2>;
 
     fn get(self) -> Self::Output {
         let a = self.0.get();
@@ -160,11 +175,14 @@ where
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Member<Key, Value>(Value, PhantomData<Key>);
 
-impl<Key, GKey, Value> Get<GKey> for Member<Key, Value>
+impl<Key, GKey, Value, GValue, KeyEq, ValueEq> Get<GKey, GValue> for Member<Key, Value>
 where
-    Key: TEqual<GKey>,
+    Key: TEqual<GKey, Output = KeyEq>,
+    Value: TEqual<GValue, Output = ValueEq>,
+    KeyEq: TBool,
+    ValueEq: TBool,
 {
-    type Output = <<Key as TEqual<GKey>>::Output as TBool>::Then<Value>;
+    type Output = <KeyEq::And<ValueEq> as TBool>::Then<Value>;
 
     fn get(self) -> Self::Output {
         Self::Output::from_value(self.0)
@@ -196,25 +214,55 @@ mod tests {
     #[allow(unused_imports)]
     use super::*;
 
+    #[derive(Default, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    struct A;
+    #[derive(Default, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    struct B;
+    #[derive(Default, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    struct C;
+    #[derive(Default, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    struct D;
+
+    type Json = Json!(
+        A: usize,
+        B: char,
+        C: String,
+    );
+
     #[test]
-    fn test() {
-        #[derive(Default, Debug, Clone, Copy, PartialEq, Eq, Hash)]
-        struct A;
-        #[derive(Default, Debug, Clone, Copy, PartialEq, Eq, Hash)]
-        struct B;
-        #[derive(Default, Debug, Clone, Copy, PartialEq, Eq, Hash)]
-        struct C;
-
-        type Json = Json!(
-            A: usize,
-            B: char,
-            C: String,
-        );
-
+    fn first_value() {
         let json = Json::default();
 
-        let a = <Json as Get<B>>::get(json);
+        let a = <Json as Get<A, usize>>::get(json).as_option().unwrap();
 
-        println!("{:?}", a);
+        println!("{}", std::any::type_name_of_val(&a));
+    }
+
+    #[test]
+    fn second_value() {
+        let json = Json::default();
+
+        let b = <Json as Get<B, char>>::get(json).as_option().unwrap();
+
+        println!("{}", std::any::type_name_of_val(&b));
+    }
+
+    #[test]
+    fn third_value() {
+        let json = Json::default();
+
+        let c = <Json as Get<C, String>>::get(json).as_option().unwrap();
+
+        println!("{}", std::any::type_name_of_val(&c));
+    }
+
+    #[test]
+    #[should_panic(expected = "called `Option::unwrap()` on a `None` value")]
+    fn non_value() {
+        let json = Json::default();
+
+        let d = <Json as Get<D, isize>>::get(json).as_option().unwrap();
+
+        println!("{}", std::any::type_name_of_val(&d));
     }
 }
