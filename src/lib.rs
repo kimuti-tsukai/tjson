@@ -99,34 +99,18 @@ pub trait VOr<RHS> {
     fn or(self, rhs: RHS) -> Self::Output;
 }
 
-impl VOr<Null> for Null {
-    type Output = Null;
+impl<RHS> VOr<RHS> for Null {
+    type Output = RHS;
 
-    fn or(self, _rhs: Null) -> Self::Output {
-        Null
-    }
-}
-
-impl<LHS, RHS> VOr<Value<RHS>> for Value<LHS> {
-    type Output = Self;
-
-    fn or(self, _rhs: Value<RHS>) -> Self::Output {
-        self
-    }
-}
-
-impl<RHS> VOr<Value<RHS>> for Null {
-    type Output = Value<RHS>;
-
-    fn or(self, rhs: Value<RHS>) -> Self::Output {
+    fn or(self, rhs: RHS) -> Self::Output {
         rhs
     }
 }
 
-impl<RHS> VOr<Null> for Value<RHS> {
+impl<LHS, RHS> VOr<RHS> for Value<LHS> {
     type Output = Self;
 
-    fn or(self, _rhs: Null) -> Self::Output {
+    fn or(self, _rhs: RHS) -> Self::Output {
         self
     }
 }
